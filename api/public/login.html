@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Accesso — Contatori di energia</title>
+<style>
+/* Stessa palette della dashboard (index.html). */
+:root {
+  --paper:      #EBEEEC;
+  --surface:    #FFFFFF;
+  --ink:        #101614;
+  --ink-2:      #5A635F;
+  --rule:       #CBD1CD;
+  --lamp-fault: #BC241C;
+  --sans: 'IBM Plex Sans', ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; min-height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--paper); color: var(--ink);
+  font-family: var(--sans); font-size: 14px; line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+form {
+  width: min(340px, calc(100vw - 32px));
+  padding: 22px 22px 20px;
+  background: var(--surface);
+  border: 1px solid var(--rule); border-radius: 4px;
+}
+h1 { margin: 0 0 16px; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+label { display: flex; flex-direction: column; gap: 3px; margin-bottom: 12px;
+        font-size: 12px; color: var(--ink-2); }
+input {
+  padding: 7px 10px; font: inherit; font-size: 14px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 3px;
+}
+input:focus-visible, button:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+button {
+  width: 100%; margin-top: 4px; padding: 8px 11px;
+  font: inherit; cursor: pointer;
+  background: var(--ink); color: var(--surface);
+  border: 1px solid var(--ink); border-radius: 3px;
+}
+button:disabled { opacity: .5; cursor: wait; }
+.error { margin: 12px 0 0; color: var(--lamp-fault); font-size: 13px; }
+.error:empty { display: none; }
+</style>
+</head>
+<body>
+<form id="login">
+  <h1>Contatori di energia</h1>
+  <label>Utente<input type="text" name="username" autocomplete="username" required autofocus></label>
+  <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
+  <button type="submit" id="go">Accedi</button>
+  <p class="error" id="error" role="alert"></p>
+</form>
+<script>
+'use strict';
+const form = document.getElementById('login');
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const go = document.getElementById('go');
+  const error = document.getElementById('error');
+  go.disabled = true;
+  error.textContent = '';
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: form.elements.username.value.trim(),
+        password: form.elements.password.value,
+      }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    location.replace('/');
+  } catch (err) {
+    error.textContent = err.message;
+    form.elements.password.select();
+  } finally {
+    go.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contatori di energia</title>
+<style>
+/* --------------------------------------------------------------------
+   Impostazione visiva: strumentazione da quadro, non dashboard SaaS.
+   Fondo chiaro perche' si guarda sotto neon di reparto; lo stato e' reso
+   con le lampade spia del quadro elettrico (verde / ambra / rosso), che
+   e' il linguaggio che un manutentore legge senza doverlo imparare.
+   Cifre in monospaziato: 100 righe di numeri vanno incolonnate.
+
+   I font vanno serviti in locale (vedi README): in un impianto senza
+   uscita internet un CDN non risponde e la pagina cade sul fallback.
+   -------------------------------------------------------------------- */
+:root {
+  --paper:      #EBEEEC;
+  --surface:    #FFFFFF;
+  --ink:        #101614;
+  --ink-2:      #5A635F;
+  --ink-3:      #8A918D;
+  --rule:       #CBD1CD;
+  --rule-soft:  #E2E6E3;
+  --lamp-ok:    #0E7A3C;
+  --lamp-warn:  #B06A05;
+  --lamp-fault: #BC241C;
+  --fault-wash: #FBEDEC;
+  --warn-wash:  #FDF4E6;
+  --sans: 'IBM Plex Sans', ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { max-width: 1500px; margin: 0 auto; padding: 20px 20px 64px; }
+
+/* --- intestazione: il conteggio e' il dato principale ---------------- */
+.top {
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: 8px 28px; padding-bottom: 14px;
+  border-bottom: 1px solid var(--rule);
+}
+.top h1 {
+  margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em;
+}
+.counts { display: flex; gap: 22px; font-family: var(--mono); font-size: 13px; }
+.counts b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.count-ok b    { color: var(--lamp-ok); }
+.count-warn b  { color: var(--lamp-warn); }
+.count-fault b { color: var(--lamp-fault); }
+.counts span { color: var(--ink-2); }
+.clock { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+.clock[data-stale="1"] { color: var(--lamp-fault); }
+
+/* --- banner guasti: compare solo se c'e' qualcosa da guardare ------- */
+.alarm {
+  margin-top: 14px; padding: 12px 14px;
+  background: var(--fault-wash);
+  border-left: 4px solid var(--lamp-fault);
+  font-size: 14px;
+}
+.alarm[hidden] { display: none; }
+.alarm-title { font-weight: 600; margin-bottom: 3px; }
+.alarm-list { font-family: var(--mono); font-size: 13px; color: var(--ink); }
+
+/* --- controlli ------------------------------------------------------ */
+.controls {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  margin: 18px 0 10px;
+}
+.controls input[type="search"] {
+  flex: 1 1 220px; max-width: 320px;
+  padding: 7px 10px; font: inherit;
+  background: var(--surface);
+  border: 1px solid var(--rule); border-radius: 3px;
+}
+.controls input[type="search"]:focus-visible,
+.toggle:focus-visible {
+  outline: 2px solid var(--ink); outline-offset: 1px;
+}
+.toggle {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 7px 11px; font: inherit; cursor: pointer;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--rule); border-radius: 3px;
+}
+.toggle[aria-pressed="true"] {
+  background: var(--ink); color: var(--surface); border-color: var(--ink);
+}
+.shown { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+
+/* --- registro contatori --------------------------------------------- */
+table { width: 100%; border-collapse: collapse; background: var(--surface); }
+
+thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--surface);
+  padding: 9px 10px;
+  font-size: 12px; font-weight: 600; color: var(--ink-2);
+  text-align: left; white-space: nowrap;
+  border-bottom: 1px solid var(--rule);
+}
+thead th.n { text-align: right; }
+
+tbody td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--rule-soft);
+  white-space: nowrap;
+}
+tbody td.n {
+  text-align: right;
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+}
+tbody tr:hover td { background: #F6F8F7; }
+
+/* lo stato si legge dal bordo sinistro anche a due metri dallo schermo */
+tr.dev { border-left: 3px solid transparent; }
+tr.dev.s-offline  { border-left-color: var(--lamp-fault); }
+tr.dev.s-degraded { border-left-color: var(--lamp-warn); }
+tr.dev.s-unknown  { border-left-color: var(--ink-3); }
+tr.dev.s-offline  td { background: var(--fault-wash); }
+tr.dev.s-degraded td { background: var(--warn-wash); }
+tr.dev.s-offline:hover td  { background: #F7E4E2; }
+tr.dev.s-degraded:hover td { background: #FAEDDA; }
+
+.name { font-weight: 500; }
+.ip { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+
+.lamp {
+  display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+  margin-right: 7px; vertical-align: baseline;
+  background: var(--ink-3);
+}
+.s-online   .lamp { background: var(--lamp-ok); }
+.s-degraded .lamp { background: var(--lamp-warn); }
+.s-offline  .lamp { background: var(--lamp-fault); }
+.state-txt { font-size: 12px; color: var(--ink-2); }
+.s-offline .state-txt { color: var(--lamp-fault); font-weight: 500; }
+.s-degraded .state-txt { color: var(--lamp-warn); }
+
+.err { color: var(--lamp-fault); font-size: 12px; }
+.muted { color: var(--ink-3); }
+
+/* lampo breve sul valore aggiornato: mostra che il dato e' vivo */
+@keyframes freshen { from { background: #DDE9E2; } to { background: transparent; } }
+td.fresh { animation: freshen 700ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  td.fresh { animation: none; }
+}
+
+.empty { padding: 40px 10px; text-align: center; color: var(--ink-2); }
+
+/* --- anagrafica: pulsanti e form di modifica ------------------------ */
+.btn {
+  padding: 7px 11px; font: inherit; cursor: pointer;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--rule); border-radius: 3px;
+}
+.btn:hover { border-color: var(--ink-3); }
+.btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+.btn-primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.btn-primary:disabled { opacity: .5; cursor: wait; }
+.btn-sm { padding: 2px 8px; font-size: 12px; }
+td.actions { text-align: right; width: 1%; }
+body:not(.can-edit) #new-device,
+body:not(.can-edit) #import-csv,
+body:not(.can-edit) [data-edit] { display: none; }
+.session { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); }
+.session[hidden] { display: none; }
+
+dialog {
+  width: min(640px, calc(100vw - 32px)); padding: 0;
+  border: 1px solid var(--rule); border-radius: 4px;
+  background: var(--surface); color: var(--ink);
+}
+dialog::backdrop { background: rgba(16, 22, 20, .35); }
+dialog form { padding: 18px 20px 16px; }
+dialog h2 { margin: 0 0 14px; font-size: 16px; font-weight: 600; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px 14px; }
+.grid label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--ink-2); }
+.grid label.wide { grid-column: 1 / -1; }
+.grid label.check { flex-direction: row; align-items: center; gap: 7px; font-size: 14px; color: var(--ink); }
+.grid input[type="text"], .grid input[type="number"], .grid textarea {
+  padding: 6px 8px; font: inherit; font-size: 14px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 3px;
+}
+.grid input:focus-visible, .grid textarea:focus-visible { outline: 2px solid var(--ink); outline-offset: 0; }
+.grid fieldset { grid-column: 1 / -1; margin: 4px 0 0; padding: 0; border: 0; }
+.grid legend { padding: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.form-hint { margin: 12px 0 0; font-size: 12px; color: var(--ink-2); }
+.form-hint[hidden] { display: none; }
+.form-error { margin: 12px 0 0; color: var(--lamp-fault); font-size: 13px; }
+.form-error:empty { display: none; }
+.form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* import CSV */
+.import-help { margin: 0 0 12px; font-size: 13px; color: var(--ink-2); }
+.import-help code { font-family: var(--mono); font-size: 12px; }
+.import-help a { color: var(--ink); }
+.import-file { display: block; margin-bottom: 10px; font: inherit; }
+.import-report { margin-top: 12px; font-size: 13px; }
+.import-report:empty { display: none; }
+.import-report .sum { font-family: var(--mono); font-size: 12px; margin-bottom: 6px; }
+.import-report .ok { color: var(--lamp-ok); }
+.import-report ul { margin: 6px 0 0; padding-left: 18px; max-height: 220px; overflow: auto;
+                    font-family: var(--mono); font-size: 12px; color: var(--lamp-fault); }
+
+@media (max-width: 900px) {
+  .hide-sm { display: none; }
+  .wrap { padding: 14px 12px 48px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <h1>Contatori di energia</h1>
+    <div class="counts">
+      <span class="count-ok"><b id="c-online">–</b> in linea</span>
+      <span class="count-warn"><b id="c-degraded">–</b> instabili</span>
+      <span class="count-fault"><b id="c-offline">–</b> non raggiungibili</span>
+    </div>
+    <div class="clock" id="clock">connessione…</div>
+    <div class="session" id="session" hidden>
+      <span id="session-user"></span>
+      <button class="btn btn-sm" id="logout">Esci</button>
+    </div>
+  </header>
+
+  <div class="alarm" id="alarm" hidden>
+    <div class="alarm-title" id="alarm-title"></div>
+    <div class="alarm-list" id="alarm-list"></div>
+  </div>
+
+  <div class="controls">
+    <input type="search" id="q" placeholder="Cerca nome, quadro o IP"
+           aria-label="Cerca contatore">
+    <button class="toggle" id="only-problems" aria-pressed="false">
+      Solo i contatori con problemi
+    </button>
+    <span class="shown" id="shown"></span>
+    <button class="btn" id="import-csv">Importa CSV</button>
+    <button class="btn btn-primary" id="new-device">+ Nuovo contatore</button>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Contatore</th>
+        <th>Stato</th>
+        <th class="n">P tot</th>
+        <th class="n">Q tot</th>
+        <th class="n">cos φ</th>
+        <th class="n">U L-N</th>
+        <th class="n hide-sm">U L-L</th>
+        <th class="n">I media</th>
+        <th class="n hide-sm">f</th>
+        <th class="n">Ultimo dato</th>
+        <th class="hide-sm">Nota</th>
+        <th><span hidden>Azioni</span></th>
+      </tr>
+    </thead>
+    <tbody id="rows">
+      <tr><td colspan="12" class="empty">Caricamento…</td></tr>
+    </tbody>
+  </table>
+
+</div>
+
+<dialog id="dev-dialog" aria-labelledby="dev-title">
+  <form id="dev-form" novalidate>
+    <h2 id="dev-title">Contatore</h2>
+    <div class="grid">
+      <label>Nome *<input type="text" name="name" required maxlength="44"></label>
+      <label>Sito<input type="text" name="site" placeholder="default"></label>
+      <label>Quadro<input type="text" name="panel"></label>
+      <label>IP o host *<input type="text" name="ip" required></label>
+      <label>Porta<input type="number" name="port" min="1" max="65535"></label>
+      <label>Unit id<input type="number" name="unit_id" min="0" max="255"></label>
+
+      <fieldset>
+        <legend>Controllo di plausibilità</legend>
+        <div class="grid">
+          <label>TA primario (A)<input type="number" name="ct_primary" min="1"></label>
+          <label>TA secondario (A)<input type="number" name="ct_secondary" min="1"></label>
+          <label>Tensione nominale (V)<input type="number" name="nominal_voltage" min="1"></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Cadenze (secondi)</legend>
+        <div class="grid">
+          <label>Lettura<input type="number" name="poll_s" min="1"></label>
+          <label>Energia<input type="number" name="energy_s" min="1"></label>
+          <label>Potenza totale<input type="number" name="totalpower_s" min="1"></label>
+        </div>
+      </fieldset>
+
+      <label class="check"><input type="checkbox" name="enabled"> Abilitato</label>
+      <label class="check"><input type="checkbox" name="word_swap"> Word invertite (word swap)</label>
+      <label class="wide">Note<textarea name="notes" rows="2"></textarea></label>
+    </div>
+    <p class="form-hint" id="rename-hint" hidden>
+      Cambiando il nome vengono rinominate anche le tabelle storico del contatore.
+    </p>
+    <p class="form-error" id="form-error" role="alert"></p>
+    <div class="form-actions">
+      <button type="button" class="btn" id="dev-cancel">Annulla</button>
+      <button type="submit" class="btn btn-primary" id="dev-save">Salva</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="import-dialog" aria-labelledby="import-title">
+  <form id="import-form" novalidate>
+    <h2 id="import-title">Importa contatori da CSV</h2>
+    <p class="import-help">
+      Una riga per contatore, con l'intestazione dei nomi di colonna:
+      <code>name</code> e <code>ip</code> obbligatorie, le altre facoltative
+      (<code>site, panel, port, unit_id, ct_primary, ct_secondary,
+      nominal_voltage, poll_ms, energy_ms, totalpower_ms, word_swap,
+      enabled, notes</code>). Separatore <code>,</code> o <code>;</code>.
+      <a href="#" id="import-template">Scarica un modello</a>.
+    </p>
+    <input type="file" class="import-file" name="file" accept=".csv,text/csv">
+    <div class="grid">
+      <label class="check wide"><input type="checkbox" name="update">
+        Aggiorna i contatori già presenti (stesso nome)</label>
+    </div>
+    <div class="import-report" id="import-report" aria-live="polite"></div>
+    <div class="form-actions">
+      <button type="button" class="btn" id="import-cancel">Chiudi</button>
+      <button type="button" class="btn" id="import-check">Verifica</button>
+      <button type="submit" class="btn btn-primary" id="import-go" disabled>Importa</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+'use strict';
+
+const state = new Map();          // id -> record
+let lastMessageAt = 0;
+let onlyProblems = false;
+let query = '';
+
+const el = (id) => document.getElementById(id);
+const PROBLEM = new Set(['offline', 'degraded', 'unknown']);
+
+const STATE_LABEL = {
+  online: 'in linea',
+  degraded: 'instabile',
+  offline: 'non raggiungibile',
+  unknown: 'mai letto',
+};
+
+// ---------- formattazione ----------
+function n(v, dec) {
+  if (v === null || v === undefined || Number.isNaN(v)) return '–';
+  return Number(v).toLocaleString('it-IT',
+    { minimumFractionDigits: dec, maximumFractionDigits: dec });
+}
+const kW  = (v) => (v == null ? '–' : n(v / 1000, 1));
+const age = (s) => {
+  if (s == null) return 'mai';
+  if (s < 60) return s + ' s';
+  if (s < 3600) return Math.floor(s / 60) + ' min';
+  if (s < 86400) return Math.floor(s / 3600) + ' h';
+  return Math.floor(s / 86400) + ' g';
+};
+
+// ---------- rendering ----------
+function visible(d) {
+  if (onlyProblems && !PROBLEM.has(d.state)) return false;
+  if (!query) return true;
+  const hay = (d.name + ' ' + (d.panel || '') + ' ' + d.site + ' ' + d.ip).toLowerCase();
+  return hay.includes(query);
+}
+
+function cells(d) {
+  return [
+    ['name', `<span class="name">${esc(d.name)}</span> <span class="ip">${esc(d.ip)}</span>`, false],
+    ['state', `<span class="lamp"></span><span class="state-txt">${STATE_LABEL[d.state] || d.state}</span>`, false],
+    ['p_total', kW(d.p_total) + ' kW', true],
+    ['q_total', kW(d.q_total) + ' kvar', true],
+    ['pf_total', n(d.pf_total, 2), true],
+    ['u_ln_avg', n(d.u_ln_avg, 1), true],
+    ['u_ll_avg', n(d.u_ll_avg, 1), true],
+    ['i_avg', n(d.i_avg, 1) + ' A', true],
+    ['freq', n(d.freq, 2), true],
+    ['seen_age_s', age(d.seen_age_s), true],
+    ['note', note(d), false],
+    ['actions', `<button class="btn btn-sm" data-edit="${d.id}">Modifica</button>`, false],
+  ];
+}
+
+function note(d) {
+  if (!d.enabled) return '<span class="muted">disabilitato</span>';
+  if (d.state === 'offline' || d.state === 'degraded') {
+    return `<span class="err">${esc(d.last_error || 'nessuna risposta')}</span>`;
+  }
+  if (d.latency_ms != null) return `<span class="muted">${d.latency_ms} ms</span>`;
+  return '';
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"]/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+const HIDE_SM = new Set(['u_ll_avg', 'freq', 'note']);
+
+function renderAll() {
+  const list = [...state.values()].filter(visible);
+  const body = el('rows');
+
+  if (!list.length) {
+    body.innerHTML = `<tr><td colspan="12" class="empty">${
+      query || onlyProblems
+        ? 'Nessun contatore corrisponde al filtro.'
+        : 'Nessun contatore configurato. Aggiungine uno con "Nuovo contatore".'
+    }</td></tr>`;
+    el('shown').textContent = '';
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const d of list) {
+    frag.appendChild(buildRow(d));
+  }
+  body.replaceChildren(frag);
+  el('shown').textContent = `${list.length} di ${state.size}`;
+}
+
+function buildRow(d) {
+  const tr = document.createElement('tr');
+  tr.className = 'dev s-' + d.state;
+  tr.dataset.id = d.id;
+  for (const [key, html, numeric] of cells(d)) {
+    const td = document.createElement('td');
+    const cls = [];
+    if (numeric) cls.push('n');
+    if (key === 'actions') cls.push('actions');
+    if (HIDE_SM.has(key)) cls.push('hide-sm');
+    if (cls.length) td.className = cls.join(' ');
+    td.dataset.k = key;
+    td.innerHTML = html;
+    tr.appendChild(td);
+  }
+  return tr;
+}
+
+/** Aggiorna in posto le celle cambiate, senza ricostruire la tabella:
+ *  ricostruire 100 righe ogni 3 s perde lo scroll e la selezione. */
+function patchRow(d, changedKeys) {
+  const tr = el('rows').querySelector(`tr.dev[data-id="${d.id}"]`);
+  if (!tr) { renderAll(); return; }
+
+  if (changedKeys.has('state')) {
+    tr.className = 'dev s-' + d.state;
+    if (onlyProblems) { renderAll(); return; }
+  }
+  const map = new Map(cells(d).map(([k, html]) => [k, html]));
+  for (const td of tr.children) {
+    const k = td.dataset.k;
+    const html = map.get(k);
+    if (html === undefined || td.innerHTML === html) continue;
+    td.innerHTML = html;
+    if (k !== 'name' && k !== 'actions') {
+      td.classList.remove('fresh');
+      void td.offsetWidth;              // riavvia l'animazione
+      td.classList.add('fresh');
+    }
+  }
+}
+
+function renderHeader() {
+  const counts = { online: 0, degraded: 0, offline: 0, unknown: 0 };
+  const down = [];
+  for (const d of state.values()) {
+    if (!d.enabled) continue;
+    counts[d.state] = (counts[d.state] || 0) + 1;
+    if (d.state === 'offline') down.push(d);
+  }
+  el('c-online').textContent = counts.online;
+  el('c-degraded').textContent = counts.degraded;
+  el('c-offline').textContent = counts.offline;
+
+  const alarm = el('alarm');
+  if (!down.length) {
+    alarm.hidden = true;
+  } else {
+    alarm.hidden = false;
+    el('alarm-title').textContent = down.length === 1
+      ? 'Un contatore non risponde'
+      : `${down.length} contatori non rispondono`;
+    const names = down.slice(0, 12)
+      .map((d) => `${d.name} (${age(d.seen_age_s)})`).join(' · ');
+    el('alarm-list').textContent =
+      names + (down.length > 12 ? ` · e altri ${down.length - 12}` : '');
+  }
+}
+
+// ---------- flusso dati ----------
+function applySnapshot(devices) {
+  state.clear();
+  for (const d of devices) state.set(d.id, d);
+  renderAll();
+  renderHeader();
+}
+
+function applyUpdate(payload) {
+  for (const id of payload.removed || []) state.delete(id);
+  for (const ch of payload.changes || []) {
+    const prev = state.get(ch.id);
+    if (!prev) { refetch(); return; }         // device nuovo: ricarica
+    const keys = new Set(Object.keys(ch).filter((k) => k !== 'id'));
+    Object.assign(prev, ch);
+    patchRow(prev, keys);
+  }
+  if ((payload.removed || []).length) renderAll();
+  renderHeader();
+}
+
+async function refetch() {
+  try {
+    const r = await fetch('/api/devices');
+    const j = await r.json();
+    applySnapshot(j.devices);
+  } catch (e) {
+    /* lo stream ci riprovera' */
+  }
+}
+
+function connect() {
+  const es = new EventSource('/api/stream');
+
+  es.addEventListener('snapshot', (ev) => {
+    lastMessageAt = Date.now();
+    applySnapshot(JSON.parse(ev.data).devices);
+  });
+
+  es.addEventListener('update', (ev) => {
+    lastMessageAt = Date.now();
+    applyUpdate(JSON.parse(ev.data));
+  });
+
+  es.onerror = () => {
+    el('clock').textContent = 'connessione interrotta, riprovo…';
+    el('clock').dataset.stale = '1';
+    // EventSource non espone lo stato HTTP: se l'errore e' una sessione
+    // scaduta, lo si scopre da /api/me.
+    checkSession();
+  };
+}
+
+// ---------- sessione ----------
+async function checkSession() {
+  try {
+    const me = await (await fetch('/api/me')).json();
+    if (me.authEnabled && !me.user) { location.replace('/login.html'); return; }
+    document.body.classList.toggle('can-edit', !!me.canEdit);
+    el('session').hidden = !me.user;
+    el('session-user').textContent = me.user || '';
+  } catch {
+    /* API giu': ci pensa l'orologio a segnalarlo */
+  }
+}
+
+el('logout').addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' }).catch(() => {});
+  location.replace('/login.html');
+});
+
+/** L'orologio in alto a destra dice se la pagina stessa e' viva: se
+ *  l'API cade, i valori restano a schermo e sembrano attuali. */
+setInterval(() => {
+  const c = el('clock');
+  if (!lastMessageAt) return;
+  const s = Math.round((Date.now() - lastMessageAt) / 1000);
+  if (s > 20) {
+    c.textContent = `dati fermi da ${age(s)} — verifica il servizio`;
+    c.dataset.stale = '1';
+  } else {
+    c.textContent = 'aggiornato ' + (s < 2 ? 'ora' : `${s} s fa`);
+    c.dataset.stale = '0';
+  }
+  // rinfresca le colonne di eta' anche senza nuovi messaggi
+  for (const d of state.values()) {
+    if (d.seen_age_s != null && d.state !== 'online') d.seen_age_s += 1;
+  }
+}, 1000);
+
+el('q').addEventListener('input', (e) => {
+  query = e.target.value.trim().toLowerCase();
+  renderAll();
+});
+
+el('only-problems').addEventListener('click', (e) => {
+  onlyProblems = !onlyProblems;
+  e.currentTarget.setAttribute('aria-pressed', String(onlyProblems));
+  renderAll();
+});
+
+// ---------- anagrafica: crea / modifica ----------
+const dialog = el('dev-dialog');
+const form = el('dev-form');
+let editingId = null;          // null = nuovo contatore
+let originalName = null;
+
+const TEXT_FIELDS = ['name', 'site', 'panel', 'ip', 'notes'];
+const INT_FIELDS = ['port', 'unit_id', 'ct_primary', 'ct_secondary', 'nominal_voltage'];
+// le cadenze si inseriscono in secondi, in tabella stanno in ms
+const SEC_FIELDS = { poll_s: 'poll_ms', energy_s: 'energy_ms', totalpower_s: 'totalpower_ms' };
+
+const DEFAULTS = {
+  site: 'default', port: 502, unit_id: 126, nominal_voltage: 400,
+  poll_ms: 60000, energy_ms: 300000, totalpower_ms: 600000, enabled: true,
+};
+
+function fillForm(cfg) {
+  for (const f of [...TEXT_FIELDS, ...INT_FIELDS]) form.elements[f].value = cfg[f] ?? '';
+  for (const [f, col] of Object.entries(SEC_FIELDS)) {
+    form.elements[f].value = cfg[col] != null ? cfg[col] / 1000 : '';
+  }
+  form.elements.enabled.checked = cfg.enabled !== false;
+  form.elements.word_swap.checked = !!cfg.word_swap;
+}
+
+function readForm() {
+  const out = {};
+  for (const f of TEXT_FIELDS) out[f] = form.elements[f].value.trim();
+  if (!out.site) out.site = 'default';
+  for (const f of INT_FIELDS) {
+    const v = form.elements[f].value.trim();
+    out[f] = v === '' ? null : Number(v);
+  }
+  for (const [f, col] of Object.entries(SEC_FIELDS)) {
+    const v = form.elements[f].value.trim();
+    out[col] = v === '' ? null : Math.round(Number(v) * 1000);
+  }
+  out.enabled = form.elements.enabled.checked;
+  out.word_swap = form.elements.word_swap.checked;
+  return out;
+}
+
+async function openEditor(id) {
+  el('form-error').textContent = '';
+  el('rename-hint').hidden = true;
+  editingId = id;
+  originalName = null;
+  if (id == null) {
+    el('dev-title').textContent = 'Nuovo contatore';
+    fillForm(DEFAULTS);
+  } else {
+    try {
+      const r = await fetch(`/api/devices/${id}/config`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.statusText);
+      originalName = j.name;
+      el('dev-title').textContent = `Modifica ${j.name}`;
+      fillForm(j);
+    } catch (e) {
+      alert('Impossibile leggere il contatore: ' + e.message);
+      return;
+    }
+  }
+  dialog.showModal();
+  form.elements.name.focus();
+}
+
+form.elements.name.addEventListener('input', () => {
+  el('rename-hint').hidden =
+    originalName == null || form.elements.name.value.trim() === originalName;
+});
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const data = readForm();
+  if (!data.name || !data.ip) {
+    el('form-error').textContent = 'Nome e IP sono obbligatori.';
+    return;
+  }
+  const save = el('dev-save');
+  save.disabled = true;
+  el('form-error').textContent = '';
+  try {
+    const isNew = editingId == null;
+    const r = await fetch(isNew ? '/api/devices' : `/api/devices/${editingId}`, {
+      method: isNew ? 'POST' : 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (r.status === 401) { location.replace('/login.html'); return; }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    dialog.close();
+    refetch();
+  } catch (err) {
+    el('form-error').textContent = err.message;
+  } finally {
+    save.disabled = false;
+  }
+});
+
+el('dev-cancel').addEventListener('click', () => dialog.close());
+el('new-device').addEventListener('click', () => openEditor(null));
+el('rows').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-edit]');
+  if (b) openEditor(Number(b.dataset.edit));
+});
+
+// ---------- import CSV ----------
+const importDialog = el('import-dialog');
+const importForm = el('import-form');
+let importText = null;          // contenuto del file scelto
+
+/** Excel salva spesso in Windows-1252: se l'UTF-8 non torna, riprova. */
+async function readCsvFile(file) {
+  const buf = await file.arrayBuffer();
+  const utf8 = new TextDecoder('utf-8').decode(buf);
+  return utf8.includes('�') ? new TextDecoder('windows-1252').decode(buf) : utf8;
+}
+
+function renderImportReport(j, dryRun) {
+  const box = el('import-report');
+  if (j.error) { box.innerHTML = `<div class="err">${esc(j.error)}</div>`; return; }
+  const parts = [
+    `${j.inserted.length} nuovi`,
+    `${j.updated.length} aggiornati`,
+    `${j.skipped.length} già presenti, ignorati`,
+  ];
+  const prefix = j.errors.length ? 'Corretti gli errori: ' : (dryRun ? 'Da importare: ' : '');
+  let html = `<div class="sum">${prefix}${parts.join(' · ')}</div>`;
+  if (j.ignored && j.ignored.length) {
+    html += `<div class="muted">Colonne ignorate: ${esc(j.ignored.join(', '))}</div>`;
+  }
+  if (j.errors.length) {
+    html += `<div class="err">${j.errors.length} righe con errori: non è stato importato nulla.</div><ul>`
+      + j.errors.map((e) => `<li>riga ${e.line}${e.name ? ` (${esc(e.name)})` : ''}: ${esc(e.error)}</li>`).join('')
+      + '</ul>';
+  } else if (dryRun) {
+    html += '<div class="ok">Nessun errore: premi Importa per salvare.</div>';
+  } else {
+    html += '<div class="ok">Importazione completata.</div>';
+  }
+  box.innerHTML = html;
+}
+
+async function runImport(dryRun) {
+  if (importText == null) {
+    el('import-report').innerHTML = '<div class="err">Scegli prima un file.</div>';
+    return;
+  }
+  el('import-check').disabled = el('import-go').disabled = true;
+  try {
+    const r = await fetch('/api/devices/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ csv: importText, update: importForm.elements.update.checked, dryRun }),
+    });
+    if (r.status === 401) { location.replace('/login.html'); return; }
+    const j = await r.json().catch(() => ({ error: r.statusText }));
+    renderImportReport(j, dryRun);
+    // Importa si abilita solo dopo una verifica pulita dello stesso file.
+    el('import-go').disabled = !(dryRun && r.ok && !j.errors?.length);
+    if (!dryRun && j.committed) refetch();
+  } catch (err) {
+    el('import-report').innerHTML = `<div class="err">${esc(err.message)}</div>`;
+  } finally {
+    el('import-check').disabled = false;
+  }
+}
+
+function resetImportCheck() {
+  el('import-go').disabled = true;
+  el('import-report').innerHTML = '';
+}
+
+importForm.elements.file.addEventListener('change', async (e) => {
+  resetImportCheck();
+  const f = e.target.files[0];
+  importText = f ? await readCsvFile(f) : null;
+  if (importText != null) runImport(true);      // verifica subito
+});
+importForm.elements.update.addEventListener('change', () => {
+  resetImportCheck();
+  if (importText != null) runImport(true);
+});
+importForm.addEventListener('submit', (e) => { e.preventDefault(); runImport(false); });
+el('import-check').addEventListener('click', () => runImport(true));
+el('import-cancel').addEventListener('click', () => importDialog.close());
+el('import-csv').addEventListener('click', () => {
+  importForm.reset();
+  importText = null;
+  resetImportCheck();
+  importDialog.showModal();
+});
+
+el('import-template').addEventListener('click', (e) => {
+  e.preventDefault();
+  const csv = 'name,site,panel,ip,port,unit_id,ct_primary,ct_secondary,nominal_voltage,poll_ms,energy_ms,notes\n'
+    + 'Q1-GENERALE,stabilimento,Q1,192.168.10.11,502,126,1000,5,400,60000,300000,\n'
+    + 'Q2-LINEA1,stabilimento,Q2,192.168.10.12,502,126,200,5,400,60000,300000,"note, anche con virgole"\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = 'contatori-modello.csv';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+checkSession();
+connect();
+</script>
+</body>
+</html>

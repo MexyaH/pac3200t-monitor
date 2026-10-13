@@ -1,0 +1,18 @@
+{
+  "name": "pac3200t-poller",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Poller Modbus TCP per contatori Siemens SENTRON PAC3200T",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node init && node src/index.js",
+    "verify": "node tools/verify-map.js"
+  },
+  "dependencies": {
+    "modbus-serial": "^8.0.17",
+    "pg": "^8.11.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

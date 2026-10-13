@@ -1,0 +1,6 @@
+name,site,panel,ip,port,unit_id,ct_primary,ct_secondary,nominal_voltage,poll_ms,energy_ms,notes
+SIM-1,banco,simulatore,pac-simulator,5040,126,1000,5,400,10000,60000,simulato
+SIM-2,banco,simulatore,pac-simulator,5041,126,100,1,400,10000,60000,simulato
+SIM-3,banco,simulatore,pac-simulator,5042,126,100,5,400,10000,60000,simulato (instabile)
+SIM-4,banco,simulatore,pac-simulator,5043,126,200,1,400,10000,60000,simulato
+SIM-5,banco,simulatore,pac-simulator,5044,126,50,5,400,10000,60000,simulato

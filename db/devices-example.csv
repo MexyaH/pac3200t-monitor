@@ -1,0 +1,6 @@
+name,site,panel,ip,port,unit_id,poll_ms,energy_ms
+Q1-GENERALE,stabilimento,Q1,192.168.10.11,502,1,15000,60000
+Q2-LINEA1,stabilimento,Q2,192.168.10.12,502,1,15000,60000
+Q2-LINEA2,stabilimento,Q2,192.168.10.13,502,1,15000,60000
+Q3-COMPRESSORI,stabilimento,Q3,192.168.10.14,502,1,15000,60000
+Q4-UTA,stabilimento,Q4,192.168.10.15,502,1,15000,60000
