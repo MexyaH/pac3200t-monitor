@@ -1,0 +1,104 @@
+# Stack per Docker Compose / Portainer. Postgres NON e' incluso: si usa
+# un'istanza esistente raggiungibile sulla rete esterna DOCKER_NETWORK.
+#
+# Rete: i container devono raggiungere due cose diverse.
+#
+#  1. Postgres. Sulla stessa rete Docker ci si collega per nome di
+#     container e porta INTERNA (di solito 5432), non quella pubblicata
+#     sull'host. Le tabelle stanno in uno schema dedicato (DB_SCHEMA).
+#
+#  2. I contatori. Una rete bridge fa NAT in uscita, quindi basta che
+#     l'HOST abbia una rotta verso la loro sottorete. Verificalo con lo
+#     scanner prima di far partire il poller.
+
+name: pac3200t
+
+services:
+  poller:
+    build: ./poller
+    container_name: pac-poller
+    restart: unless-stopped
+    networks:
+      - pacnet
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?serve DATABASE_URL, vedi README}
+      DB_SCHEMA: ${DB_SCHEMA:-pac}
+      # Anagrafica caricata all'avvio. I contatori gia' in tabella non
+      # vengono toccati: se ne correggi uno a mano, resta. Lascia vuoto
+      # per inserire tutto a mano.
+      DEVICES_CSV: ${DEVICES_CSV:-/app/db/devices-example.csv}
+      CONCURRENCY: "10"
+      MODBUS_TIMEOUT_MS: "1200"
+      FLUSH_MS: "2000"
+      STATUS_FLUSH_MS: "30000"
+      VERBOSE: "0"
+      TZ: Europe/Rome
+    volumes:
+      - ./db:/app/db:ro          # gli strumenti leggono l'anagrafica CSV
+    deploy:
+      resources:
+        limits: { memory: 256M }
+
+  api:
+    build: ./api
+    container_name: pac-api
+    restart: unless-stopped
+    networks:
+      - pacnet
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?serve DATABASE_URL, vedi README}
+      DB_SCHEMA: ${DB_SCHEMA:-pac}
+      PORT: "8080"
+      REFRESH_MS: "3000"
+      # Login della dashboard. Senza ADMIN_PASSWORD la dashboard e'
+      # visibile a tutti ma la modifica dell'anagrafica e' disabilitata.
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      TZ: Europe/Rome
+    ports:
+      - "${API_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits: { memory: 256M }
+
+  # Cinque PAC3200T finti, per provare lo stack senza la rete
+  # dell'impianto. Non parte da solo:
+  #   docker compose --profile sim up -d --build
+  # Il terzo si spegne e riaccende ogni 45 secondi, cosi' si vedono la
+  # macchina a stati, il banner di allarme e lo storico dei dropout.
+  pac-simulator:
+    build: ./poller
+    profiles: ["sim"]
+    restart: unless-stopped
+    entrypoint: ["node"]
+    command: ["tools/simulator.js", "5040", "5"]
+    networks:
+      - pacnet
+    environment:
+      TZ: Europe/Rome
+
+  # Strumenti di collaudo: non parte da solo.
+  #   docker compose --profile tools run --rm tools tools/scan.js ...
+  tools:
+    build: ./poller
+    profiles: ["tools"]
+    entrypoint: ["node"]
+    command: ["--version"]
+    networks:
+      - pacnet
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-}
+      TZ: Europe/Rome
+    volumes:
+      - ./db:/app/db:ro
+
+networks:
+  pacnet:
+    name: ${DOCKER_NETWORK:-pacnet}
+    external: true
